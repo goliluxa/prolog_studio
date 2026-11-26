@@ -1,8 +1,9 @@
-import { PrologStatus, PrologAnswer, WorkerResponse } from '../types';
+import type { PrologStatus, PrologAnswer, WorkerResponse } from '../types';
 
 export class PrologEngine {
   private worker: Worker | null = null;
   private status: PrologStatus = 'loading';
+  private collectingAnswers = false;
   private onStatusChangeCallbacks: ((status: PrologStatus) => void)[] = [];
   private onAnswerCallbacks: ((answer: PrologAnswer, hasMore: boolean) => void)[] = [];
   private onLogCallbacks: ((type: 'system' | 'error' | 'false', message: string) => void)[] = [];
@@ -16,6 +17,7 @@ export class PrologEngine {
     if (this.worker) {
       this.worker.terminate();
     }
+    this.collectingAnswers = false;
     this.setStatus('loading');
 
     this.worker = new Worker(new URL('../worker/prolog.worker.ts', import.meta.url), {
@@ -42,12 +44,14 @@ export class PrologEngine {
         this.onLogCallbacks.forEach(cb => cb('error', data.error));
       } else if (data.type === 'answer') {
         this.onAnswerCallbacks.forEach(cb => cb(data.answer, data.hasMore));
-        if (!data.hasMore) {
+        if (!data.hasMore || !this.collectingAnswers) {
+          this.collectingAnswers = false;
           this.setStatus('ready');
         }
       } else if (data.type === 'no_more_answers') {
+        this.collectingAnswers = false;
+        this.onAnswerCallbacks.forEach(cb => cb({ status: 'false' }, false));
         this.setStatus('ready');
-        this.onLogCallbacks.forEach(cb => cb('false', 'false.'));
       } else if (data.type === 'error') {
         this.setStatus('error');
         this.onLogCallbacks.forEach(cb => cb('error', data.error));
@@ -114,14 +118,14 @@ export class PrologEngine {
   }
 
   public findAll(maxAnswers = 100) {
+    this.collectingAnswers = true;
     this.setStatus('answering');
     this.worker?.postMessage({ type: 'find_all', maxAnswers });
   }
 
   public stop() {
     this.onLogCallbacks.forEach(cb => cb('system', 'Выполнение прервано пользователем'));
-    this.worker?.postMessage({ type: 'stop' });
-    this.setStatus('ready');
+    this.spawnWorker();
   }
 
   public restart() {

@@ -1,3 +1,5 @@
+import './tau-browser-environment';
+
 // @ts-ignore
 import pl from 'tau-prolog';
 // @ts-ignore
@@ -7,15 +9,17 @@ import loaderRandom from 'tau-prolog/modules/random';
 // @ts-ignore
 import loaderStatistics from 'tau-prolog/modules/statistics';
 
-import { WorkerRequest, WorkerResponse } from '../types';
+import type { WorkerRequest, WorkerResponse } from '../types';
 
 loaderLists(pl);
 loaderRandom(pl);
 loaderStatistics(pl);
 
+const textProgram = { script: false, file: false, url: false };
 let session = pl.create(10000);
 
 session.consult(':- use_module(library(lists)).', {
+  ...textProgram,
   success: () => {
     self.postMessage({ type: 'ready' } as WorkerResponse);
   },
@@ -32,6 +36,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
     session = pl.create(10000);
     const fullCode = ':- use_module(library(lists)).\n' + data.code;
     session.consult(fullCode, {
+      ...textProgram,
       success: () => {
         self.postMessage({
           type: 'consult_success',
@@ -68,7 +73,9 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
     let count = 0;
     const collect = () => {
       session.answer((answer: any) => {
-        if (answer === false || answer === null || count >= max) {
+        if (answer === null) {
+          reportLimitExceeded();
+        } else if (answer === false || count >= max) {
           self.postMessage({ type: 'no_more_answers' } as WorkerResponse);
         } else if (pl.type.is_error(answer)) {
           const errText = pl.format_answer(answer) || String(answer);
@@ -104,7 +111,9 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
 
 function getNextAnswer() {
   session.answer((answer: any) => {
-    if (answer === false || answer === null) {
+    if (answer === null) {
+      reportLimitExceeded();
+    } else if (answer === false) {
       self.postMessage({ type: 'no_more_answers' } as WorkerResponse);
     } else if (pl.type.is_error(answer)) {
       const errText = pl.format_answer(answer) || String(answer);
@@ -130,3 +139,10 @@ function getNextAnswer() {
   });
 }
 
+function reportLimitExceeded() {
+  self.postMessage({
+    type: 'answer',
+    answer: { status: 'error', error: 'Превышен предел вычислений Prolog' },
+    hasMore: false
+  } satisfies WorkerResponse);
+}
